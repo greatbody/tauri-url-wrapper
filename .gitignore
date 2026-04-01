@@ -1,5 +1,10 @@
 # Rust / Cargo
 /src-tauri/target/
 
+# Build-generated files
+/dist/
+/src-tauri/tauri.conf.json
+/src-tauri/Cargo.toml
+
 # macOS
 .DS_Store
