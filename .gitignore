@@ -5,6 +5,7 @@
 /dist/
 /src-tauri/tauri.conf.json
 /src-tauri/Cargo.toml
+/src-tauri/icons/icon.icns
 
 # macOS
 .DS_Store
