@@ -9,6 +9,7 @@ APP_NAME=""
 ICON_PATH=""
 WINDOW_WIDTH=1200
 WINDOW_HEIGHT=800
+INSTALL=false
 
 usage() {
   cat <<EOF
@@ -21,14 +22,15 @@ Required:
   --name  <APP_NAME>     Display name of the app (e.g. "My App")
 
 Optional:
-  --icon  <PATH>         Path to a PNG icon (1024x1024 recommended)
-  --width <PIXELS>       Window width (default: 1200)
-  --height <PIXELS>      Window height (default: 800)
-  -h, --help             Show this help message
+  --icon    <PATH>         Path to a PNG icon (1024x1024 recommended)
+  --width   <PIXELS>       Window width (default: 1200)
+  --height  <PIXELS>       Window height (default: 800)
+  --install                Copy the built .app to /Applications after build
+  -h, --help               Show this help message
 
 Examples:
   ./build.sh --url http://localhost:4096 --name "OpenCode WebUI"
-  ./build.sh --url https://example.com --name "Example" --icon ./myicon.png
+  ./build.sh --url https://example.com --name "Example" --icon ./myicon.png --install
 EOF
   exit 0
 }
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --icon)   ICON_PATH="$2"; shift 2 ;;
     --width)  WINDOW_WIDTH="$2"; shift 2 ;;
     --height) WINDOW_HEIGHT="$2"; shift 2 ;;
+    --install) INSTALL=true; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -80,6 +83,9 @@ cat > "${SCRIPT_DIR}/src-tauri/tauri.conf.json" <<EOF
   "build": {
     "frontendDist": "../dist",
     "devUrl": "${APP_URL}"
+  },
+  "bundle": {
+    "icon": ["icons/icon.icns", "icons/icon.png"]
   },
   "app": {
     "windows": [
@@ -126,17 +132,50 @@ if [[ -n "$ICON_PATH" ]]; then
   cp "$ICON_PATH" "${SCRIPT_DIR}/src-tauri/icons/icon.png"
 fi
 
+# --- generate .icns from icon.png ---
+echo ""
+echo "==> Generating icon.icns..."
+ICONSET_DIR=$(mktemp -d)/icon.iconset
+mkdir -p "$ICONSET_DIR"
+ICON_SRC="${SCRIPT_DIR}/src-tauri/icons/icon.png"
+sips -z 16 16     "$ICON_SRC" --out "$ICONSET_DIR/icon_16x16.png"      > /dev/null
+sips -z 32 32     "$ICON_SRC" --out "$ICONSET_DIR/icon_16x16@2x.png"   > /dev/null
+sips -z 32 32     "$ICON_SRC" --out "$ICONSET_DIR/icon_32x32.png"      > /dev/null
+sips -z 64 64     "$ICON_SRC" --out "$ICONSET_DIR/icon_32x32@2x.png"   > /dev/null
+sips -z 128 128   "$ICON_SRC" --out "$ICONSET_DIR/icon_128x128.png"    > /dev/null
+sips -z 256 256   "$ICON_SRC" --out "$ICONSET_DIR/icon_128x128@2x.png" > /dev/null
+sips -z 256 256   "$ICON_SRC" --out "$ICONSET_DIR/icon_256x256.png"    > /dev/null
+sips -z 512 512   "$ICON_SRC" --out "$ICONSET_DIR/icon_256x256@2x.png" > /dev/null
+sips -z 512 512   "$ICON_SRC" --out "$ICONSET_DIR/icon_512x512.png"    > /dev/null
+sips -z 1024 1024 "$ICON_SRC" --out "$ICONSET_DIR/icon_512x512@2x.png" > /dev/null
+iconutil -c icns "$ICONSET_DIR" -o "${SCRIPT_DIR}/src-tauri/icons/icon.icns"
+rm -rf "$(dirname "$ICONSET_DIR")"
+echo "    Generated: src-tauri/icons/icon.icns"
+
 # --- build ---
 echo ""
-echo "==> Running: cargo tauri build"
+echo "==> Running: cargo tauri build --bundles app"
 cd "${SCRIPT_DIR}/src-tauri"
-cargo tauri build
+cargo tauri build --bundles app
 
 # --- report output ---
-DMG_PATH=$(find "${SCRIPT_DIR}/src-tauri/target/release/bundle/dmg" -name '*.dmg' 2>/dev/null | head -1)
-APP_PATH=$(find "${SCRIPT_DIR}/src-tauri/target/release/bundle/macos" -name '*.app' 2>/dev/null | head -1)
+APP_PATH=$(find "${SCRIPT_DIR}/src-tauri/target/release/bundle/macos" -name '*.app' 2>/dev/null | head -1 || true)
+DMG_PATH=$(find "${SCRIPT_DIR}/src-tauri/target/release/bundle/dmg" -name '*.dmg' 2>/dev/null | head -1 || true)
 
 echo ""
 echo "==> Build complete!"
-[[ -n "${APP_PATH:-}" ]] && echo "    .app: ${APP_PATH}"
-[[ -n "${DMG_PATH:-}" ]] && echo "    .dmg: ${DMG_PATH}"
+[[ -n "${APP_PATH:-}" ]] && echo "    .app: ${APP_PATH}" || true
+[[ -n "${DMG_PATH:-}" ]] && echo "    .dmg: ${DMG_PATH}" || true
+
+# --- install ---
+if [[ "$INSTALL" == true && -n "${APP_PATH:-}" ]]; then
+  echo ""
+  echo "==> Installing to /Applications..."
+  DEST="/Applications/$(basename "$APP_PATH")"
+  if [[ -d "$DEST" ]]; then
+    echo "    Removing existing: ${DEST}"
+    rm -rf "$DEST"
+  fi
+  cp -R "$APP_PATH" /Applications/
+  echo "    Installed: ${DEST}"
+fi
