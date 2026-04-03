@@ -124,6 +124,12 @@ jobs:
           sysinfo = "0.35"
           EOF
 
+      - name: Unhide generated configs from gitignore
+        shell: bash
+        run: |
+          grep -v -E '^/src-tauri/tauri\.conf\.json$|^/src-tauri/Cargo\.toml$|^/dist/$' .gitignore > .gitignore.tmp
+          mv .gitignore.tmp .gitignore
+
       - name: Generate icons
         run: cargo tauri icon src-tauri/icons/icon.png
 
