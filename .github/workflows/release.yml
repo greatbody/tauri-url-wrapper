@@ -1,0 +1,151 @@
+name: Release OpenCodeWebUI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: OpenCodeWebUI
+  APP_URL: "http://localhost:4096"
+  APP_SLUG: opencodewebui
+  APP_IDENTIFIER: com.greatbody.opencodewebui
+  WINDOW_WIDTH: 1200
+  WINDOW_HEIGHT: 800
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+          - platform: windows-latest
+            args: ""
+            rust_targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked
+
+      - name: Strip v prefix from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate build configs
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+
+          cat > dist/index.html <<EOF
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"><title>${APP_NAME}</title></head>
+          <body><p>Loading...</p></body>
+          </html>
+          EOF
+
+          cat > src-tauri/tauri.conf.json <<EOF
+          {
+            "productName": "${APP_NAME}",
+            "version": "${APP_VERSION}",
+            "identifier": "${APP_IDENTIFIER}",
+            "build": {
+              "frontendDist": "../dist",
+              "devUrl": "${APP_URL}"
+            },
+            "bundle": {
+              "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
+            },
+            "app": {
+              "windows": [
+                {
+                  "title": "${APP_NAME}",
+                  "url": "${APP_URL}",
+                  "width": ${WINDOW_WIDTH},
+                  "height": ${WINDOW_HEIGHT},
+                  "resizable": true,
+                  "fullscreen": false
+                }
+              ],
+              "security": {
+                "csp": null
+              }
+            }
+          }
+          EOF
+
+          cat > src-tauri/Cargo.toml <<EOF
+          [package]
+          name = "${APP_SLUG}"
+          version = "0.1.0"
+          edition = "2024"
+
+          [build-dependencies]
+          tauri-build = { version = "2", features = [] }
+
+          [dependencies]
+          tauri = { version = "2", features = [] }
+          sysinfo = "0.35"
+          EOF
+
+      - name: Generate icons
+        run: cargo tauri icon src-tauri/icons/icon.png
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: cargo tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: "OpenCodeWebUI ${{ github.ref_name }}"
+          releaseBody: |
+            ## OpenCodeWebUI ${{ github.ref_name }}
+
+            Native desktop wrapper for OpenCode WebUI.
+
+            ### Downloads
+            | Platform | Format |
+            |----------|--------|
+            | macOS (Universal) | `.dmg` |
+            | Windows | `.msi` / `.exe` |
+            | Linux | `.AppImage` / `.deb` |
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
