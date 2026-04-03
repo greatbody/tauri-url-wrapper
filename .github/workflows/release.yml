@@ -58,7 +58,8 @@ jobs:
             patchelf
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --locked
+        uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall tauri-cli --no-confirm
 
       - name: Strip v prefix from tag
         id: version
