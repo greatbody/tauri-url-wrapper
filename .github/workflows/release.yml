@@ -37,30 +37,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_targets }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Install Tauri CLI
-        uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall tauri-cli --no-confirm
-
       - name: Strip v prefix from tag
         id: version
         shell: bash
@@ -91,6 +67,8 @@ jobs:
               "devUrl": "${APP_URL}"
             },
             "bundle": {
+              "active": true,
+              "targets": "all",
               "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
             },
             "app": {
@@ -130,6 +108,30 @@ jobs:
         run: |
           grep -v -E '^/src-tauri/tauri\.conf\.json$|^/src-tauri/Cargo\.toml$|^/dist/$' .gitignore > .gitignore.tmp
           mv .gitignore.tmp .gitignore
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Tauri CLI
+        uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall tauri-cli --no-confirm
 
       - name: Generate icons
         run: cargo tauri icon src-tauri/icons/icon.png
