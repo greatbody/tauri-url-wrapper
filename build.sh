@@ -150,6 +150,9 @@ iconutil -c icns "$ICONSET_DIR" -o "${SCRIPT_DIR}/src-tauri/icons/icon.icns"
 rm -rf "$(dirname "$ICONSET_DIR")"
 echo "    Generated: src-tauri/icons/icon.icns"
 
+# --- clean stale bundle artifacts from previous builds ---
+rm -rf "${SCRIPT_DIR}/src-tauri/target/release/bundle"
+
 # --- build ---
 echo ""
 echo "==> Running: cargo tauri build --bundles app"
