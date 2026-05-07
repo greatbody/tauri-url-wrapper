@@ -1,0 +1,238 @@
+name: Build URL Wrapper
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: "Target URL the app will load (e.g. https://example.com)"
+        required: true
+        type: string
+      app_name:
+        description: "Application display name (used for window title, exe name, productName)"
+        required: true
+        type: string
+      app_version:
+        description: "Application version (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+        type: string
+      icon_url:
+        description: "Optional PNG icon URL (>=512x512 recommended). Leave empty to use repo default."
+        required: false
+        type: string
+      window_width:
+        description: "Window width"
+        required: false
+        default: "1200"
+        type: string
+      window_height:
+        description: "Window height"
+        required: false
+        default: "800"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+          - platform: windows-latest
+            args: ""
+            rust_targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive slug and identifier
+        id: meta
+        shell: bash
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          # slug: lowercase, non-alnum -> '-', collapse, trim
+          slug=$(printf '%s' "$APP_NAME" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          if [ -z "$slug" ]; then
+            echo "App name produced empty slug" >&2
+            exit 1
+          fi
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "identifier=com.greatbody.${slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate build configs
+        shell: bash
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          APP_URL: ${{ inputs.app_url }}
+          APP_VERSION: ${{ inputs.app_version }}
+          APP_IDENTIFIER: ${{ steps.meta.outputs.identifier }}
+          APP_SLUG: ${{ steps.meta.outputs.slug }}
+          WINDOW_WIDTH: ${{ inputs.window_width }}
+          WINDOW_HEIGHT: ${{ inputs.window_height }}
+        run: |
+          mkdir -p dist
+
+          cat > dist/index.html <<EOF
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"><title>${APP_NAME}</title></head>
+          <body><p>Loading...</p></body>
+          </html>
+          EOF
+
+          cat > src-tauri/tauri.conf.json <<EOF
+          {
+            "productName": "${APP_NAME}",
+            "version": "${APP_VERSION}",
+            "identifier": "${APP_IDENTIFIER}",
+            "build": {
+              "frontendDist": "../dist",
+              "devUrl": "${APP_URL}"
+            },
+            "bundle": {
+              "active": true,
+              "targets": "all",
+              "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
+            },
+            "app": {
+              "windows": [
+                {
+                  "title": "${APP_NAME}",
+                  "url": "${APP_URL}",
+                  "width": ${WINDOW_WIDTH},
+                  "height": ${WINDOW_HEIGHT},
+                  "resizable": true,
+                  "fullscreen": false
+                }
+              ],
+              "security": {
+                "csp": null
+              }
+            }
+          }
+          EOF
+
+          cat > src-tauri/Cargo.toml <<EOF
+          [package]
+          name = "${APP_SLUG}"
+          version = "0.1.0"
+          edition = "2024"
+
+          [build-dependencies]
+          tauri-build = { version = "2", features = [] }
+
+          [dependencies]
+          tauri = { version = "2", features = [] }
+          sysinfo = "0.35"
+          EOF
+
+      - name: Unhide generated configs from gitignore
+        shell: bash
+        run: |
+          grep -v -E '^/src-tauri/tauri\.conf\.json$|^/src-tauri/Cargo\.toml$|^/dist/$' .gitignore > .gitignore.tmp
+          mv .gitignore.tmp .gitignore
+
+      - name: Download custom icon
+        if: ${{ inputs.icon_url != '' }}
+        shell: bash
+        run: |
+          curl -fsSL "${{ inputs.icon_url }}" -o src-tauri/icons/icon.png
+          file src-tauri/icons/icon.png
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Tauri CLI
+        uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall tauri-cli --no-confirm
+
+      - name: Generate icons
+        run: cargo tauri icon src-tauri/icons/icon.png
+
+      - name: Build (Tauri)
+        shell: bash
+        env:
+          CI: "true"
+        run: cargo tauri build ${{ matrix.args }}
+
+      # ---------- Collect artifacts per platform ----------
+
+      - name: Stage Windows portable exe
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          APP_SLUG: ${{ steps.meta.outputs.slug }}
+        run: |
+          mkdir -p staging
+          # Tauri v2 puts the raw exe at src-tauri/target/release/<binary>.exe
+          # Binary name follows Cargo's [package].name (= slug), with .exe suffix on Windows.
+          src="src-tauri/target/release/${APP_SLUG}.exe"
+          if [ ! -f "$src" ]; then
+            echo "Expected portable exe not found: $src" >&2
+            ls -la src-tauri/target/release/ || true
+            exit 1
+          fi
+          # Copy as portable, named after the human-readable app name.
+          out="staging/${APP_NAME}-portable.exe"
+          cp "$src" "$out"
+          ls -la staging/
+
+      - name: Stage macOS bundle
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          mkdir -p staging
+          # universal-apple-darwin target dir
+          base="src-tauri/target/universal-apple-darwin/release/bundle"
+          find "$base/dmg" -name '*.dmg' -exec cp {} staging/ \; 2>/dev/null || true
+          find "$base/macos" -name '*.app' -maxdepth 2 -exec sh -c 'tar -C "$(dirname "$1")" -czf "staging/$(basename "$1").tar.gz" "$(basename "$1")"' _ {} \; 2>/dev/null || true
+          ls -la staging/
+
+      - name: Stage Linux bundles
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          mkdir -p staging
+          base="src-tauri/target/release/bundle"
+          find "$base/appimage" -name '*.AppImage' -exec cp {} staging/ \; 2>/dev/null || true
+          find "$base/deb" -name '*.deb' -exec cp {} staging/ \; 2>/dev/null || true
+          ls -la staging/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-${{ inputs.app_version }}-${{ matrix.platform }}
+          path: staging/*
+          if-no-files-found: error
+          retention-days: 14
